@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>独自実況アプリ（スマホ外部カメラ対応・修正版）</title>
+    <!-- 通信ライブラリ -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- AIライブラリ -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+    <!-- フォント -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@700;900&family=Noto+Serif+JP:wght@700&family=M+PLUS+Rounded+1c:wght@800&family=Yusei+Magic&family=DotGothic16&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Noto Sans JP', sans-serif; background: #f0f2f5; margin: 0; padding: 15px; color: #333; text-align: center; overflow-x: hidden; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); box-sizing: border-box;}
+        h1 { font-size: clamp(18px, 4vw, 24px); margin-top: 0; margin-bottom: 20px; color: #2c3e50; }
+        
+        .layout { display: flex; gap: 20px; text-align: left; margin-bottom: 20px; flex-wrap: wrap; }
+        .col { flex: 1; min-width: 300px; background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; box-sizing: border-box;}
+        
+        .btn { padding: 12px 15px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; border-radius: 6px; color: white; margin: 5px 0; width: 100%; transition: 0.2s; box-sizing: border-box; }
+        .btn:disabled { background: #ccc !important; cursor: not-allowed; }
+        .btn-screen { background: #3498db; } .btn-screen:hover:not(:disabled) { background: #2980b9; }
+        .btn-phone { background: #9b59b6; } .btn-phone:hover:not(:disabled) { background: #8e44ad; }
+        .btn-pip { background: #e67e22; } .btn-pip:hover:not(:disabled) { background: #d35400; }
+        .btn-rec { background: #e74c3c; font-size: clamp(14px, 3vw, 18px); padding: 15px; } .btn-rec:hover:not(:disabled) { background: #c0392b; }
+        
+        #qr-box { display: none; margin: 10px 0; padding: 15px; border: 2px dashed #9b59b6; border-radius: 8px; background: #fff; text-align: center; }
+        #qrcode { display: flex; justify-content: center; margin: 10px 0; }
+        #status-log { text-align: left; background: #2c3e50; color: #ecf0f1; padding: 10px; border-radius: 6px; font-size: 12px; height: 100px; overflow-y: auto; font-family: monospace; margin-top: 15px;}
+        
+        /* 外部スマホリモコン画面 */
+        #mobile-screen { display: none; background: #111; color: white; min-height: 100vh; padding: 20px; box-sizing: border-box; flex-direction: column; justify-content: center; text-align: center; margin: -15px; }
+        .btn-huge { color: white; border: none; padding: 15px; font-size: 18px; font-weight: bold; border-radius: 8px; width: 100%; max-width: 300px; margin: 10px auto; cursor: pointer; }
+        .btn-front { background: #3498db; } .btn-rear { background: #2ecc71; } .btn-switch { background: #f39c12; display: none; }
+        
+        .bg-panel { margin-top: 10px; padding: 12px; background: #e8f4f8; border-radius: 8px; border: 1px solid #bce0fd; font-size: 14px;}
+        .panel-box { background:#fff; padding:15px; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,0.1); text-align:left; margin-bottom: 20px; box-sizing: border-box;}
+
+        /* 音声ミキサー */
+        .audio-mixer { background: #2c3e50; padding: 15px; border-radius: 8px; color: white; margin-bottom: 20px; display: flex; flex-direction: column; gap: 10px; text-align: left; }
+        .mixer-row { display: flex; align-items: center; justify-content: space-between; background: #34495e; padding: 10px; border-radius: 6px; flex-wrap: wrap;}
+        .switch-label { display: flex; align-items: center; gap: 10px; font-weight: bold; font-size: 14px; cursor: pointer; flex-shrink: 0; }
+        .switch-input { width: 18px; height: 18px; cursor: pointer; }
+        .vu-meter { flex-grow: 1; height: 12px; background: #111; border-radius: 6px; margin-left: 10px; position: relative; overflow: hidden; min-width: 100px; margin-top: 5px;}
+        .vu-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #2ecc71 0%, #f1c40f 70%, #e74c3c 100%); transition: width 0.1s ease-out; }
+
+        /* プレビュー画面の魔法 */
+        .preview-wrapper { width: 100%; display: flex; justify-content: center; align-items: center; background: #e8f4f8; border-radius: 8px; padding: 10px; box-sizing: border-box; margin-bottom: 10px;}
+        .preview-container { position: relative; width: 100%; height: auto; max-height: 450px; aspect-ratio: 16/9; background: #000; overflow: hidden; border: 2px solid #333; box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: all 0.3s ease; touch-action: none; }
+        
+        #screen-preview { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+        #camera-pip { position: absolute; width: 30%; bottom: 4%; right: 4%; border: 3px solid #f39c12; border-radius: 8px; display: none; object-fit: cover; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.5); background:#111; cursor: grab; touch-action: none;}
+        #camera-pip:active { cursor: grabbing; }
+        
+        #text-layer { position: absolute; inset: 0; pointer-events: none; z-index: 20; overflow: hidden;}
+        .draggable-text { position: absolute; color: white; cursor: move; pointer-events: auto; user-select: none; text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000; white-space: pre-wrap; line-height: 1.2; text-align: center; font-weight: bold; touch-action: none;}
+        .draggable-text:hover { outline: 2px dashed #f1c40f; }
+
+        /* ★ スマホ閲覧時のレスポンシブデザイン（縦並び） */
+        @media (max-width: 768px) {
+            .layout { flex-direction: column; }
+            .col { min-width: 100%; padding: 10px; }
+            .container { padding: 10px; }
+            .btn { font-size: 13px; padding: 12px; }
+            .preview-container { max-height: 50vh; }
+            .mixer-row { flex-direction: column; align-items: flex-start; }
+            .vu-meter { width: 100%; margin-left: 0; }
+            .text-controls { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+            .text-controls > div { display: flex; gap: 10px; align-items: center; width: 100%; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ================= 統合メイン画面 (PC・スマホ単体共通) ================= -->
+    <div class="container" id="pc-screen">
+        <h1>🎥 独自実況スタジオ (スマホ完全対応)</h1>
+        
+        <div class="layout">
+            <!-- 🌟 左側：メインプレビュー -->
+            <div class="col" style="flex: 1.5;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
+                    <h3 style="margin:0; color:#2980b9;">💻 1. メイン画面 (仕上がり)</h3>
+                    <select id="record-aspect" style="padding:6px 10px; border-radius:4px; font-weight:bold; background:#fff; border:2px solid #3498db; cursor:pointer; font-size: 14px;">
+                        <option value="16:9">📺 16:9 (通常横長)</option>
+                        <option value="9:16">📱 9:16 (Shorts/縦長)</option>
+                        <option value="1:1">🔲 1:1 (正方形)</option>
+                    </select>
+                </div>
+                
+                <div class="preview-wrapper">
+                    <div class="preview-container" id="preview-container">
+                        <video id="screen-preview" autoplay muted playsinline></video>
+                        <video id="camera-pip" autoplay muted playsinline></video>
+                        <div id="text-layer"></div>
+                    </div>
+                </div>
+                
+                <button class="btn btn-screen" id="btn-screen">💻 画面全体を録画する (※一部スマホ非対応)</button>
+                <p style="font-size: 11px; color: #555; margin-top: 5px;">※画面共有をしない場合は、下のカメラ映像がメイン背景になります。</p>
+            </div>
+            
+            <!-- 🌟 右側：カメラ・エフェクト設定 -->
+            <div class="col" style="flex: 1;">
+                <h3 style="margin-top:0; color:#8e44ad;">📱 2. カメラ ＆ エフェクト</h3>
+                <video id="camera-preview" autoplay muted playsinline style="width: 100%; max-height: 220px; background: #111; border-radius: 8px; margin-bottom: 10px; object-fit: contain;"></video>
+                <div style="display:flex; gap:10px; flex-wrap: wrap;">
+                    <button class="btn" id="btn-cam" style="flex:1; min-width:120px; background:#f39c12; color:white; font-weight:bold;">📷 本体カメラ起動</button>
+                    <button class="btn btn-phone" id="btn-phone" style="flex:1; min-width:120px;">📲 外部スマホを繋ぐ</button>
+                </div>
+                <button class="btn btn-pip" id="btn-pip" disabled>🔲 メイン画面に小窓を出す (PiP)</button>
+                
+                <div class="bg-panel">
+                    <b style="color: #2980b9;">✨ 演出エフェクト ＆ AI背景</b><br>
+                    <select id="effect-select" style="width:100%; padding:8px; margin-top:5px; margin-bottom:10px; border-radius:6px; border:1px solid #ccc; font-weight:bold;">
+                        <option value="none">🟢 エフェクトなし</option>
+                        <option value="beauty">🌟 美肌 (明るく滑らか)</option>
+                        <option value="sepia">🎞️ レトロ (セピア)</option>
+                        <option value="grayscale">⚫️ モノクロ (白黒)</option>
+                        <option value="focus">⚡ 集中線 (アニメ風)</option>
+                        <option value="sparkle">✨ キラキラ (パーティクル)</option>
+                    </select>
+
+                    <div style="display: flex; gap:5px; align-items:center;">
+                        <input type="file" id="bg-file" accept="image/*" style="width:100%; font-size:12px;">
+                        <button class="btn" id="btn-ai-toggle" style="background:#7f8c8d; margin:0; padding:6px 12px; font-size:13px; min-width:90px;">AI背景 ON</button>
+                    </div>
+                </div>
+                <div id="qr-box"><p style="margin:0; font-size:12px; font-weight:bold; color:#8e44ad;">連携するスマホで読み取る</p><div id="qrcode" style="margin: 5px auto;"></div></div>
+            </div>
+        </div>
+
+        <!-- テキスト追加パネル -->
+        <div class="panel-box">
+            <h3 style="margin-top:0; color:#9b59b6; font-size: 16px;">📝 テロップ(テキスト)を配置</h3>
+            <div class="text-controls">
+                <input type="text" id="txt-input" placeholder="テキストを入力..." style="width:100%; padding:10px; border-radius:6px; border:1px solid #ccc;">
+                <div>
+                    <select id="txt-font" style="flex: 1; min-width: 100px; padding:10px; border-radius:6px; border:1px solid #ccc; font-weight:bold;">
+                        <option value="'Noto Sans JP', sans-serif" data-weight="700" style="font-family:'Noto Sans JP'">ゴシック</option>
+                        <option value="'Noto Serif JP', serif" data-weight="700" style="font-family:'Noto Serif JP'">明朝体</option>
+                        <option value="'M PLUS Rounded 1c', sans-serif" data-weight="800" style="font-family:'M PLUS Rounded 1c'">丸ゴシック</option>
+                        <option value="'Noto Sans JP', sans-serif" data-weight="900" style="font-family:'Noto Sans JP'; font-weight:900;">極太</option>
+                        <option value="'Yusei Magic', sans-serif" data-weight="400" style="font-family:'Yusei Magic'">手書き風</option>
+                        <option value="'DotGothic16', sans-serif" data-weight="400" style="font-family:'DotGothic16'">ドット絵</option>
+                    </select>
+                    <input type="color" id="txt-color" value="#ffffff" title="文字色" style="width:40px; height:40px; cursor:pointer; border:none; padding:0;">
+                    <span style="font-size:13px; font-weight:bold;">サイズ:</span>
+                    <input type="number" id="txt-size" value="10" min="2" max="50" style="width:50px; padding:10px; border-radius:6px; border:1px solid #ccc;">
+                    <button class="btn" id="btn-add-text" style="background:#9b59b6; padding:10px; width:auto; min-width: 80px; margin:0;">＋ 追加</button>
+                </div>
+            </div>
+            <p style="font-size:11px; color:#e74c3c; margin:10px 0 0 0;">※文字や小窓は指でスワイプして移動できます。消す時はダブルタップ。</p>
+        </div>
+
+        <!-- オーディオミキサー -->
+        <div class="audio-mixer" id="audio-mixer">
+            <div style="font-weight:bold; color:#f1c40f; font-size:15px; margin-bottom: 5px;">🎛️ 音声ミキサー</div>
+            <div class="mixer-row">
+                <label class="switch-label"><input type="checkbox" id="chk-sys-audio" class="switch-input" checked>💻 デバイスの画面音</label>
+                <div class="vu-meter"><div class="vu-bar" id="vu-sys-bar"></div></div>
+            </div>
+            <div class="mixer-row">
+                <label class="switch-label"><input type="checkbox" id="chk-mic-audio" class="switch-input" checked>🎙️ マイク (あなたの声)</label>
+                <div class="vu-meter"><div class="vu-bar" id="vu-mic-bar"></div></div>
+            </div>
+        </div>
+
+        <div style="border-top: 1px solid #ddd; padding-top: 15px;">
+            <div style="display: flex; justify-content: center; gap:10px; align-items:center; flex-wrap:wrap;">
+                <button class="btn btn-rec" id="btn-rec" disabled style="flex:2; min-width: 200px; padding:18px;">🔴 3️⃣ 録画開始 (5秒前)</button>
+                <button class="btn" id="btn-thumb-live" style="flex:1; min-width: 150px; background:#34495e; padding:18px;">📸 サムネ保存</button>
+            </div>
+            <a id="btn-dl" class="btn btn-dl" style="display:none; width: 100%; margin: 15px auto;">⬇️ 動画を保存 (ダウンロード)</a>
+        </div>
+        
+        <!-- ================= 🎬 録画後ミニスタジオ ================= -->
+        <div id="post-studio" style="display:none; margin-top:20px; padding:20px; background:#e8f4f8; border-radius:12px; border:2px solid #3498db; text-align: left; box-sizing: border-box;">
+            <h2 style="margin-top:0; color:#2980b9; text-align: center; font-size: 18px;">🎬 録画後ミニスタジオ (カット保存)</h2>
+            
+            <div class="preview-wrapper" style="background:transparent; padding:0;">
+                <div class="preview-container" id="edit-wrapper" style="aspect-ratio: 16/9; width: 100%; max-width: 600px; margin-bottom: 15px;">
+                    <video id="edit-player" controls playsinline style="width: 100%; height: 100%; object-fit: contain; background: #000;"></video>
+                </div>
+            </div>
+
+            <div style="display:flex; justify-content:center;">
+                <div style="background:#fff; padding:15px; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,0.1); width:100%; max-width:500px; text-align:center; box-sizing:border-box;">
+                    <h4 style="margin-top:0; color:#e67e22; font-size:15px;">✂️ 前後をカット</h4>
+                    <div style="display:flex; justify-content:center; gap:10px; margin-bottom:10px;">
+                        <button class="btn" id="btn-set-start" style="background:#f39c12; padding:8px;">[ 開始位置</button>
+                        <button class="btn" id="btn-set-end" style="background:#d35400; padding:8px;">] 終了位置</button>
+                    </div>
+                    <div style="font-weight:bold; margin-bottom:10px; color:#333; font-size:13px;"><span id="lbl-trim-start">0.0</span>秒 ～ <span id="lbl-trim-end">0.0</span>秒</div>
+                    <button class="btn" id="btn-trim" style="background:#e67e22; width:100%; font-size:15px;">💾 この範囲で最終保存</button>
+                    <a id="btn-dl-original" class="btn" style="background:#34495e; margin-top:10px; text-decoration:none; display:block; font-size:13px;">⬇️ カットせずに元動画を保存</a>
+                </div>
+            </div>
+        </div>
+
+        <div id="status-log">▶ システム待機中...<br></div>
+    </div>
+
+    <!-- 裏で映像を処理するための隠し要素 -->
+    <canvas id="ai-canvas" style="display:none;"></canvas>
+    <canvas id="bg-cache-canvas" style="display:none;"></canvas>
+    <video id="bg-video-hidden" autoplay muted playsinline style="display:none;"></video>
+
+    <!-- ================= 外部スマホ（リモコン）専用画面 ================= -->
+    <div id="mobile-screen">
+        <h2 style="color: #3498db; margin-top:0;">📱 外部カメラ 送信中</h2>
+        <video id="mobile-preview" autoplay muted playsinline style="width: 100%; max-width:400px; margin:0 auto 10px; border: 2px solid #555; border-radius: 8px; display:none; object-fit: contain;"></video>
+        <div id="camera-select-buttons">
+            <button class="btn-huge btn-front" id="btn-start-front">🤳 インカメラで繋ぐ</button>
+            <button class="btn-huge btn-rear" id="btn-start-rear">🚀 背面カメラで繋ぐ</button>
+        </div>
+        <button class="btn-huge btn-switch" id="btn-switch-cam">🔄 イン/アウト 切り替え</button>
+        <div id="mobile-remote" style="display:none; margin-top:20px; padding-top: 20px; border-top: 1px dashed #555;">
+            <p style="color:#2ecc71; font-weight:bold; margin-bottom:10px;">🎮 親機から録画操作</p>
+            <button class="btn-huge" id="btn-mobile-rec" style="background: #e74c3c; padding: 20px 15px; font-size: 22px; box-shadow: 0 4px 15px rgba(231,76,60,0.4);">🔴 親機の録画を開始</button>
+        </div>
+        <div id="mobile-status" style="margin-top: 15px; font-size: 14px; font-weight: bold; color: #f1c40f;"></div>
+    </div>
+
+    <!-- ===== スクリプト ===== -->
+    <script>
+        const statusLog = document.getElementById('status-log');
+        function logMsg(msg) {
+            if(statusLog) { statusLog.innerHTML += '▶ ' + msg + '<br>'; statusLog.scrollTop = statusLog.scrollHeight; }
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const targetPeerId = urlParams.get('peerId');
+        // QRコードから開いたスマホ画面を明示的に取得（未定義エラー対策）
+        const mobileScreen = document.getElementById('mobile-screen');
+
+        // ★ 【通信復旧】Googleの公式STUNサーバーを組み込み、確実に繋がるようにする！
+        const peerOptions = { config: { 'iceServers': [ { urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' } ] } };
+
+        // ★ スマホ単体（ブラウザ）で開かれたかの判定
+        const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+        let mediaRecorder; let recordedChunks = [];
+        let screenStream = null; let rawCameraStream = null; let cameraStream = null;    
+        let pcPeer = null; let dataConn = null;
+
+        // ==========================================
+        // ★ タッチ対応・ドラッグ共通処理 (指・マウス両対応)
+        // ==========================================
+        function makeDraggable(element, container) {
+            let isDragging = false, startX, startY, initLeft, initTop;
+
+            const startDrag = (e) => {
+                isDragging = true;
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const rect = element.getBoundingClientRect(); const parentRect = container.getBoundingClientRect();
+                startX = clientX; startY = clientY;
+                
+                element.style.right = 'auto'; element.style.bottom = 'auto'; element.style.transform = 'none';
+                element.style.left = ((rect.left - parentRect.left) / parentRect.width * 100) + '%';
+                element.style.top = ((rect.top - parentRect.top) / parentRect.height * 100) + '%';
+                initLeft = parseFloat(element.style.left); initTop = parseFloat(element.style.top);
+                element.style.cursor = 'grabbing';
+            };
+
+            const moveDrag = (e) => {
+                if (!isDragging) return;
+                if(e.cancelable && e.type === 'touchmove') e.preventDefault(); // スマホの画面スクロールを防止
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const parentRect = container.getBoundingClientRect();
+                const dx = (clientX - startX) / parentRect.width * 100;
+                const dy = (clientY - startY) / parentRect.height * 100;
+                element.style.left = (initLeft + dx) + '%'; element.style.top = (initTop + dy) + '%';
+            };
+
+            const endDrag = () => { if(isDragging) { isDragging = false; element.style.cursor = 'move'; } };
+
+            element.addEventListener('mousedown', startDrag); 
+            window.addEventListener('mousemove', moveDrag); 
+            window.addEventListener('mouseup', endDrag);
+
+            element.addEventListener('touchstart', startDrag, {passive: false}); 
+            window.addEventListener('touchmove', moveDrag, {passive: false}); 
+            window.addEventListener('touchend', endDrag);
+        }
+
+        // ==========================================
+        // 📐 アスペクト比（サイズ）の全体制御 【巨大化修正】
+        // ==========================================
+        const aspectSelect = document.getElementById('record-aspect');
+        const previewContainer = document.getElementById('preview-container');
+        
+        aspectSelect.addEventListener('change', (e) => {
+            const ratio = e.target.value; const [w, h] = ratio.split(':').map(Number);
+            previewContainer.style.aspectRatio = `${w} / ${h}`;
+            
+            // ★ スマホ画面かPC画面かで、縦長になった時の高さを自動調整する
+            const isMobileView = window.innerWidth <= 768;
+            if (h >= w) { // 縦長 または 四角
+                previewContainer.style.width = isMobileView ? "100%" : "auto";
+                previewContainer.style.height = isMobileView ? "auto" : "450px";
+            } else { // 横長
+                previewContainer.style.width = "100%";
+                previewContainer.style.height = "auto";
+            }
+            window.dispatchEvent(new Event('resize'));
+            logMsg(`📐 録画サイズを「${e.target.options[e.target.selectedIndex].text}」に設定しました。`);
+        });
+
+        // ==========================================
+        // 📝 テキスト（テロップ）追加機能
+        // ==========================================
+        const textLayer = document.getElementById('text-layer');
+        const fontSelect = document.getElementById('txt-font');
+
+        fontSelect.addEventListener('change', (e) => {
+            const selectedOption = e.target.options[e.target.selectedIndex];
+            e.target.style.fontFamily = selectedOption.style.fontFamily; e.target.style.fontWeight = selectedOption.dataset.weight || 'bold';
+        });
+        
+        document.getElementById('btn-add-text').addEventListener('click', () => {
+            const text = document.getElementById('txt-input').value; if (!text) return;
+            
+            const span = document.createElement('div');
+            span.className = 'draggable-text'; span.innerText = text; span.style.color = document.getElementById('txt-color').value;;
+            span.style.fontFamily = fontSelect.value; span.style.fontWeight = fontSelect.options[fontSelect.selectedIndex].getAttribute('data-weight') || '700';
+            span.dataset.size = document.getElementById('txt-size').value;; span.dataset.fontFamily = fontSelect.value; span.dataset.fontWeight = span.style.fontWeight;
+            
+            const wrapperH = previewContainer.clientHeight || 300;
+            span.style.fontSize = (wrapperH * (span.dataset.size / 100)) + 'px';
+            span.style.left = '50%'; span.style.top = '50%'; span.style.transform = 'translate(-50%, -50%)';
+            
+            // ダブルタップ（またはダブルクリック）で削除
+            let lastTap = 0;
+            span.addEventListener('touchend', (e) => {
+                const currentTime = new Date().getTime(); const tapLength = currentTime - lastTap;
+                if (tapLength < 300 && tapLength > 0) { if(confirm('テキストを削除しますか？')) span.remove(); e.preventDefault(); }
+                lastTap = currentTime;
+            });
+            span.addEventListener('dblclick', () => { if(confirm('テキストを削除しますか？')) span.remove(); });
+
+            textLayer.appendChild(span);
+            makeDraggable(span, textLayer); // ★指でも動かせるように適用
+            document.getElementById('txt-input').value = ""; 
+        });
+
+        window.addEventListener('resize', () => {
+            const wrapperH = previewContainer.clientHeight || 300;
+            document.querySelectorAll('.draggable-text').forEach(span => { span.style.fontSize = (wrapperH * (parseFloat(span.dataset.size) / 100)) + 'px'; });
+        });
+
+        // ==========================================
+        // 🎛️ 音声ミキサー
+        // ==========================================
+        let audioCtx = null, sysGain = null, micGain = null, mixDest = null;
+        let sysSource = null, micSource = null, sysAnalyser = null, micAnalyser = null, isMeterRunning = false;
+
+        function initAudioMixer() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                sysGain = audioCtx.createGain(); micGain = audioCtx.createGain(); mixDest = audioCtx.createMediaStreamDestination();
+                sysGain.connect(mixDest); micGain.connect(mixDest);
+                sysGain.gain.value = document.getElementById('chk-sys-audio').checked ? 1 : 0; micGain.gain.value = document.getElementById('chk-mic-audio').checked ? 1 : 0;
+                document.getElementById('chk-sys-audio').addEventListener('change', (e) => { if (sysGain) sysGain.gain.value = e.target.checked ? 1 : 0; });
+                document.getElementById('chk-mic-audio').addEventListener('change', (e) => { if (micGain) micGain.gain.value = e.target.checked ? 1 : 0; });
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function setupMeter(sourceNode, elementId) {
+            let analyser = elementId === 'vu-sys-bar' ? sysAnalyser : micAnalyser;
+            if (!analyser) { analyser = audioCtx.createAnalyser(); analyser.fftSize = 256; if (elementId === 'vu-sys-bar') sysAnalyser = analyser; else micAnalyser = analyser; }
+            sourceNode.connect(analyser); if (!isMeterRunning) { isMeterRunning = true; requestAnimationFrame(updateMeters); }
+        }
+
+        function updateMeters() {
+            if (isMeterRunning) requestAnimationFrame(updateMeters);
+            const dataArray = new Uint8Array(256);
+            if (sysAnalyser) { sysAnalyser.getByteFrequencyData(dataArray); let max = 0; for(let i=0; i<dataArray.length; i++) if(dataArray[i] > max) max = dataArray[i]; document.getElementById('vu-sys-bar').style.width = Math.min(100, (max / 255) * 100) + '%'; }
+            if (micAnalyser) { micAnalyser.getByteFrequencyData(dataArray); let max = 0; for(let i=0; i<dataArray.length; i++) if(dataArray[i] > max) max = dataArray[i]; document.getElementById('vu-mic-bar').style.width = Math.min(100, (max / 255) * 100) + '%'; }
+        }
+
+        function attachSysAudio(stream) { initAudioMixer(); if (sysSource) sysSource.disconnect(); if (stream.getAudioTracks().length > 0) { sysSource = audioCtx.createMediaStreamSource(new MediaStream([stream.getAudioTracks()[0]])); sysSource.connect(sysGain); setupMeter(sysSource, 'vu-sys-bar'); } }
+        function attachMicAudio(stream) { initAudioMixer(); if (micSource) micSource.disconnect(); if (stream.getAudioTracks().length > 0) { micSource = audioCtx.createMediaStreamSource(new MediaStream([stream.getAudioTracks()[0]])); micSource.connect(micGain); setupMeter(micSource, 'vu-mic-bar'); } }
+
+        // ==========================================
+        // ✨ エフェクト ＆ 🎨 AI背景処理
+        // ==========================================
+        const effectSelect = document.getElementById('effect-select'); let currentEffect = 'none';
+        const aiCanvas = document.getElementById('ai-canvas'), aiCtx = aiCanvas.getContext('2d', { willReadFrequently: true });
+        const bgCacheCanvas = document.getElementById('bg-cache-canvas'), bgCacheCtx = bgCacheCanvas.getContext('2d', { alpha: false });
+        const bgVideoHidden = document.getElementById('bg-video-hidden');
+        let customBgImg = new Image(), isBgCached = false, segmentation = null, isBgProcessing = false, isCanvasLoopRunning = false, isProcessingFrame = false; 
+
+        function applyEffectFilter(ctx) {
+            switch(currentEffect) { case 'beauty': ctx.filter = 'brightness(1.15) contrast(0.95) saturate(1.2)'; break; case 'sepia': ctx.filter = 'sepia(100%) brightness(0.9)'; break; case 'grayscale': ctx.filter = 'grayscale(100%)'; break; default: ctx.filter = 'none'; break; }
+        }
+
+        let focusAngle = 0; let particles = [];
+        function drawOverlayEffects(ctx, width, height) {
+            if (currentEffect === 'focus') {
+                const centerX = width / 2, centerY = height / 2, radius = Math.max(width, height);
+                ctx.save(); ctx.translate(centerX, centerY); focusAngle += 0.05; ctx.rotate(focusAngle); ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                for (let i = 0; i < 360; i += 15) {
+                    ctx.beginPath(); const innerR = radius * 0.3 + Math.random() * radius * 0.15, outerR = radius * 1.5; const angle1 = i * Math.PI / 180, angle2 = (i + 4) * Math.PI / 180;
+                    ctx.moveTo(innerR * Math.cos(angle1), innerR * Math.sin(angle1)); ctx.lineTo(outerR * Math.cos(angle1), outerR * Math.sin(angle1)); ctx.lineTo(outerR * Math.cos(angle2), outerR * Math.sin(angle2)); ctx.lineTo(innerR * Math.cos(angle2), innerR * Math.sin(angle2)); ctx.fill();
+                } ctx.restore();
+            } else if (currentEffect === 'sparkle') {
+                if (particles.length < 40) particles.push({ x: Math.random() * width, y: Math.random() * height, size: Math.random() * 4 + 1, alpha: Math.random(), speed: (Math.random() * 0.05 + 0.02) * (Math.random() > 0.5 ? 1 : -1) });
+                ctx.save(); particles.forEach(p => { p.alpha += p.speed; if (p.alpha > 1) { p.alpha = 1; p.speed *= -1; } if (p.alpha < 0) { p.alpha = 0; p.speed *= -1; p.x = Math.random() * width; p.y = Math.random() * height; }
+                    ctx.globalAlpha = p.alpha; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillRect(p.x - p.size*2.5, p.y - p.size*0.4, p.size*5, p.size*0.8); ctx.fillRect(p.x - p.size*0.4, p.y - p.size*2.5, p.size*0.8, p.size*5);
+                }); ctx.restore();
+            }
+        }
+
+        function checkAndResizeAiCanvas() {
+            let vw = bgVideoHidden.videoWidth, vh = bgVideoHidden.videoHeight;
+            if (!vw || !vh) { const track = rawCameraStream ? rawCameraStream.getVideoTracks()[0] : null; if (track && track.getSettings) { const settings = track.getSettings(); vw = settings.width; vh = settings.height; } }
+            if (!vw || !vh) { vw = 1280; vh = 720; } 
+            if (aiCanvas.width !== vw || aiCanvas.height !== vh) { aiCanvas.width = vw; aiCanvas.height = vh; bgCacheCanvas.width = vw; bgCacheCanvas.height = vh; isBgCached = false; }
+        }
+
+        function drawBackgroundCache() {
+            bgCacheCtx.fillStyle = '#00FF00'; bgCacheCtx.fillRect(0, 0, bgCacheCanvas.width, bgCacheCanvas.height);
+            if (customBgImg.src && customBgImg.complete) {
+                const canvasRatio = bgCacheCanvas.width / bgCacheCanvas.height, imgRatio = customBgImg.width / customBgImg.height; let drawWidth, drawHeight, offsetX = 0, offsetY = 0;
+                if (imgRatio > canvasRatio) { drawHeight = bgCacheCanvas.height; drawWidth = customBgImg.width * (bgCacheCanvas.height / customBgImg.height); offsetX = (bgCacheCanvas.width - drawWidth) / 2; } 
+                else { drawWidth = bgCacheCanvas.width; drawHeight = customBgImg.height * (bgCacheCanvas.width / customBgImg.width); offsetY = (bgCacheCanvas.height - drawHeight) / 2; }
+                bgCacheCtx.drawImage(customBgImg, offsetX, offsetY, drawWidth, drawHeight);
+            } isBgCached = true;
+        }
+
+        function onResults(results) {
+            checkAndResizeAiCanvas(); const vw = aiCanvas.width, vh = aiCanvas.height; if (!isBgCached) drawBackgroundCache();
+            aiCtx.save(); aiCtx.clearRect(0, 0, vw, vh); aiCtx.globalCompositeOperation = 'source-over'; aiCtx.drawImage(results.segmentationMask, 0, 0, vw, vh);
+            aiCtx.globalCompositeOperation = 'source-in'; applyEffectFilter(aiCtx); aiCtx.drawImage(bgVideoHidden, 0, 0, vw, vh); aiCtx.filter = 'none';
+            aiCtx.globalCompositeOperation = 'destination-over'; aiCtx.drawImage(bgCacheCanvas, 0, 0); aiCtx.globalCompositeOperation = 'source-over'; drawOverlayEffects(aiCtx, vw, vh); aiCtx.restore();
+        }
+
+        async function startCanvasLoop() {
+            if (!isCanvasLoopRunning || !rawCameraStream) return;
+            if (bgVideoHidden.readyState >= 2 && !bgVideoHidden.paused && bgVideoHidden.videoWidth > 0 && !isProcessingFrame) {
+                checkAndResizeAiCanvas();
+                if (isBgProcessing) {
+                    isProcessingFrame = true; await segmentation.send({ image: bgVideoHidden }).catch(e => {}); isProcessingFrame = false;
+                } else {
+                    const vw = aiCanvas.width, vh = aiCanvas.height; aiCtx.save(); aiCtx.clearRect(0, 0, vw, vh); applyEffectFilter(aiCtx); aiCtx.drawImage(bgVideoHidden, 0, 0, vw, vh); aiCtx.filter = 'none'; drawOverlayEffects(aiCtx, vw, vh); aiCtx.restore();
+                }
+            }
+            setTimeout(() => { if (isCanvasLoopRunning) requestAnimationFrame(startCanvasLoop); }, 1000 / 30); 
+        }
+
+        function updateStreamRouting() {
+            if (!rawCameraStream) return;
+            const cameraPreview = document.getElementById('camera-preview'), cameraPip = document.getElementById('camera-pip');
+            if (isBgProcessing || currentEffect !== 'none') {
+                if (!isCanvasLoopRunning) {
+                    isCanvasLoopRunning = true; bgVideoHidden.srcObject = rawCameraStream; bgVideoHidden.play().catch(e=>{});
+                    const processedStream = aiCanvas.captureStream(30);
+                    cameraStream = processedStream; cameraPreview.srcObject = cameraStream; cameraPip.srcObject = cameraStream;
+                    cameraPreview.play().catch(e=>{}); cameraPip.play().catch(e=>{});
+                    startCanvasLoop();
+                }
+            } else {
+                isCanvasLoopRunning = false; cameraStream = rawCameraStream; 
+                cameraPreview.srcObject = cameraStream; cameraPip.srcObject = cameraStream;
+                cameraPreview.play().catch(e=>{}); cameraPip.play().catch(e=>{});
+            }
+        }
+
+        effectSelect.addEventListener('change', (e) => { currentEffect = e.target.value; updateStreamRouting(); });
+        document.getElementById('bg-file').addEventListener('change', (e) => { const file = e.target.files[0]; if (file) { customBgImg.onload = () => { isBgCached = false; }; customBgImg.src = URL.createObjectURL(file); } });
+        
+        document.getElementById('btn-ai-toggle').addEventListener('click', async () => {
+            if (!rawCameraStream) { alert("先にカメラを起動してください！"); return; }
+            const btnAiToggle = document.getElementById('btn-ai-toggle');
+            if (!isBgProcessing) {
+                btnAiToggle.innerText = "⏳ 準備中...";
+                if (!segmentation) { segmentation = new SelfieSegmentation({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}` }); segmentation.setOptions({ modelSelection: 1 }); segmentation.onResults(onResults); }
+                isBgProcessing = true; btnAiToggle.innerText = "✨ AI背景 OFF"; btnAiToggle.style.background = "#e74c3c"; logMsg("✅ AI背景ON"); updateStreamRouting();
+            } else { isBgProcessing = false; btnAiToggle.innerText = "AI背景 ON"; btnAiToggle.style.background = "#7f8c8d"; logMsg("❌ AI背景OFF"); updateStreamRouting(); }
+        });
+
+        // ==========================================
+        // 【1. リモコン専用スマホ画面 (QRから飛んできた時)】
+        // ==========================================
+        if (targetPeerId) {
+            document.body.style.background = "#111"; document.getElementById('pc-screen').style.display = 'none'; mobileScreen.style.display = 'flex';
+            const mobileStatus = document.getElementById('mobile-status'), mobilePreview = document.getElementById('mobile-preview'), mobileRemote = document.getElementById('mobile-remote'), btnMobileRec = document.getElementById('btn-mobile-rec');
+            let currentFacingMode = 'user', localStream = null, currentCall = null, mobilePeer = new Peer(peerOptions);
+            mobilePeer.on('error', (err) => { console.error('PeerJSエラー:', err); mobileStatus.textContent = `❌ 通信エラー（${err.type || err.message || '不明'}）`; });
+
+            async function startMobileCamera(facingMode) {
+                currentFacingMode = facingMode; document.getElementById('camera-select-buttons').style.display = 'none'; mobilePreview.style.display = 'block'; mobileStatus.innerText = "⏳ カメラ準備中...";
+                try {
+                    if (localStream) localStream.getTracks().forEach(t => t.stop());
+                    localStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode }, audio: { echoCancellation: true, noiseSuppression: true } });
+                    mobilePreview.srcObject = localStream;
+                    if (!currentCall) { mobileStatus.innerText = "🔄 PC接続中..."; if (!mobilePeer.id) mobilePeer.on('open', () => makeCall()); else makeCall(); } 
+                    else { const videoTrack = localStream.getVideoTracks()[0], sender = currentCall.peerConnection.getSenders().find(s => s.track.kind === 'video'); if (sender) sender.replaceTrack(videoTrack); }
+                    document.getElementById('btn-switch-cam').style.display = 'block';
+                } catch (err) {
+                    console.error('スマホカメラ起動エラー:', err);
+                    const detail = err && err.name ? `${err.name}: ${err.message || ''}` : String(err);
+                    mobileStatus.textContent = `❌ カメラ起動失敗（${detail}）`;
+                    document.getElementById('camera-select-buttons').style.display = 'block';
+                    mobilePreview.style.display = 'none';
+                }
+            }
+            
+            function makeCall() {
+                currentCall = mobilePeer.call(targetPeerId, localStream); dataConn = mobilePeer.connect(targetPeerId);
+                dataConn.on('open', () => { mobileRemote.style.display = 'block'; mobileStatus.innerHTML = "<span style='color:#2ecc71;'>✅ PCと接続完了！</span>"; });
+                dataConn.on('data', (data) => {
+                    if(data === 'REC_ON') { btnMobileRec.innerText = "⏹ 録画停止"; btnMobileRec.style.background = "#5f6368"; }
+                    else if(data === 'REC_OFF') { btnMobileRec.innerText = "🔴 PCの録画を開始"; btnMobileRec.style.background = "#e74c3c"; }
+                    else if(data.startsWith('COUNT:')) { btnMobileRec.innerText = data.split(':')[1]; btnMobileRec.style.background = "#f39c12"; }
+                });
+                currentCall.on('error', (err) => { mobileStatus.innerHTML = "<span style='color:#e74c3c;'>❌ 通信エラー: " + err.type + "</span>"; });
+            }
+            document.getElementById('btn-start-front').addEventListener('click', () => startMobileCamera('user'));
+            document.getElementById('btn-start-rear').addEventListener('click', () => startMobileCamera('environment'));
+            document.getElementById('btn-switch-cam').addEventListener('click', () => startMobileCamera(currentFacingMode === 'user' ? 'environment' : 'user'));
+            btnMobileRec.addEventListener('click', () => { if (dataConn && dataConn.open) dataConn.send('TOGGLE_REC'); });
+
+        // ==========================================
+        // 【2. メインアプリ側 (PC または スマホ単体)】
+        // ==========================================
+        } else {
+            const screenPreview = document.getElementById('screen-preview'), cameraPip = document.getElementById('camera-pip'), btnRec = document.getElementById('btn-rec'), btnPip = document.getElementById('btn-pip');
+            let isPipActive = false;
+            
+            // 最初から小窓をドラッグ可能にしておく
+            makeDraggable(cameraPip, previewContainer);
+
+            // スマホの場合、不要なボタンを隠してレイアウトを最適化
+            if (isMobileDevice) {
+                document.getElementById('btn-phone').style.display = 'none';
+                document.getElementById('btn-cam').innerText = "📷 カメラ起動 (押すたび切替)";
+                document.getElementById('btn-screen').innerText = "💻 画面録画 (※対応機種のみ)";
+                logMsg("📱 スマホモードで起動しました！");
+            }
+
+            btnPip.addEventListener('click', () => {
+                if(!rawCameraStream) return;
+                isPipActive = !isPipActive;
+                if(isPipActive) {
+                    cameraPip.style.display = 'block'; btnPip.innerText = "🔲 小窓を隠す"; btnPip.style.background = "#7f8c8d"; logMsg("🔳 小窓を出しました！指やマウスで動かせます。");
+                } else { cameraPip.style.display = 'none'; btnPip.innerText = "🔲 画面に小窓を出す (PiP)"; btnPip.style.background = "#e67e22"; }
+            });
+
+            function setRawCamera(stream, name) {
+                if (rawCameraStream) rawCameraStream.getTracks().forEach(t => t.stop());
+                rawCameraStream = stream; updateStreamRouting(); attachMicAudio(rawCameraStream); btnPip.disabled = false; btnRec.disabled = false; logMsg(`✅ ${name}をセットしました。`);
+            }
+
+            // スマホ単体対応：内側/外側のカメラ切替機能
+            let pcCamFacing = 'user';
+            document.getElementById('btn-cam').addEventListener('click', async () => {
+                initAudioMixer();
+                try { 
+                    if (isMobileDevice && rawCameraStream && rawCameraStream.getVideoTracks().length > 0) { pcCamFacing = pcCamFacing === 'user' ? 'environment' : 'user'; }
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: pcCamFacing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: { echoCancellation: true, noiseSuppression: true } }); 
+                    setRawCamera(stream, pcCamFacing==='user'?"カメラ(自撮り)":"カメラ(背面)"); 
+                } catch(e) { logMsg("❌ カメラ起動失敗。権限を確認してください。"); }
+            });
+
+            document.getElementById('btn-screen').addEventListener('click', async () => {
+                initAudioMixer();
+                try {
+                    if (!navigator.mediaDevices.getDisplayMedia) { alert("お使いの端末（ブラウザ）は画面共有に対応していません。\nスマホ単体の場合は「カメラ」をご利用ください。"); return; }
+                    const vStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false } });
+                    if(screenStream) screenStream.getTracks().forEach(t => t.stop());
+                    screenStream = vStream; screenPreview.srcObject = screenStream;
+                    attachSysAudio(screenStream); btnRec.disabled = false;
+                    if (screenStream.getAudioTracks().length === 0) { document.getElementById('chk-sys-audio').checked = false; sysGain.gain.value = 0; } else { document.getElementById('chk-sys-audio').checked = true; sysGain.gain.value = 1; }
+                    screenStream.getVideoTracks()[0].onended = () => { if (isRecording) stopRecording(); };
+                } catch(e) { logMsg("❌ 画面の選択がキャンセルされました。"); }
+            });
+
+            // ★【バグ完全修正】スマホ連携の確実な受信 (以前の安定バージョン＋STUN)
+            document.getElementById('btn-phone').addEventListener('click', () => {
+                initAudioMixer(); const qrBox = document.getElementById('qr-box'), qrcodeDiv = document.getElementById('qrcode'); qrBox.style.display = 'block'; qrcodeDiv.innerHTML = "";
+                if (pcPeer) { pcPeer.destroy(); pcPeer = null; }
+                
+                setTimeout(() => {
+                    pcPeer = new Peer(peerOptions);
+                    pcPeer.on('open', (id) => { logMsg("✅ 準備完了。外部スマホでQRを読み取ってください"); new QRCode(qrcodeDiv, { text: window.location.origin + window.location.pathname + '?peerId=' + id, width: 140, height: 140 }); });
+                    pcPeer.on('connection', (conn) => { dataConn = conn; conn.on('data', (data) => { if (data === 'TOGGLE_REC') toggleRecording(); }); });
+                    pcPeer.on('call', (call) => { 
+                        call.answer(); 
+                        let isStreamHandled = false;
+                        call.on('stream', (remoteStream) => { 
+                            if (isStreamHandled) return; isStreamHandled = true; // ★重複ブロック
+                            qrBox.style.display = 'none'; setRawCamera(remoteStream, "外部ワイヤレスカメラ"); 
+                        }); 
+                        call.on('error', (err) => { logMsg("❌ 接続エラー: " + err.type); });
+                    });
+                }, 100);
+            });
+
+            // ==========================================
+            // ⏺️ 最終録画システム 
+            // ==========================================
+            let isRecording = false, isCountingDown = false, countdownTimer = null;
+            function updateRemoteStatus(isRec, text) { if (dataConn && dataConn.open) { if(text) dataConn.send('COUNT:' + text); else dataConn.send(isRec ? 'REC_ON' : 'REC_OFF'); } }
+
+            function stopRecording() {
+                if(countdownTimer) clearInterval(countdownTimer); if(mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+                isRecording = false; isCountingDown = false; btnRec.innerText = "🔴 3️⃣ 録画開始 (5秒前)"; btnRec.style.background = "#e74c3c"; btnRec.disabled = false;
+                document.getElementById('record-aspect').disabled = false; updateRemoteStatus(false); logMsg("⏹ 録画を停止しました");
+            }
+
+            function toggleRecording() {
+                if (isRecording) { stopRecording(); } else {
+                    if (!screenStream && !cameraStream) { alert("カメラまたは録画する画面を選択してください！"); return; }
+                    if (isCountingDown) return;
+                    initAudioMixer(); document.getElementById('post-studio').style.display = 'none'; document.getElementById('record-aspect').disabled = true; 
+                    isCountingDown = true; let count = 5; btnRec.disabled = true; btnRec.style.background = "#f39c12";
+                    const updateText = `⏳ ${count}秒後に開始`; btnRec.innerText = updateText; updateRemoteStatus(false, updateText); 
+                    countdownTimer = setInterval(() => { count--; if (count > 0) { const t = `⏳ ${count}秒後に開始`; btnRec.innerText = t; updateRemoteStatus(false, t); } else { clearInterval(countdownTimer); isCountingDown = false; startActualRecording(); } }, 1000);
+                }
+            }
+            btnRec.addEventListener('click', toggleRecording);
+
+            function startActualRecording() {
+                try {
+                    const ratioStr = aspectSelect.value; let targetW = 1920, targetH = 1080;
+                    if (ratioStr === '9:16') { targetW = 1080; targetH = 1920; } else if (ratioStr === '1:1') { targetW = 1080; targetH = 1080; }
+
+                    const recCanvas = document.createElement('canvas'); recCanvas.width = targetW; recCanvas.height = targetH; const recCtx = recCanvas.getContext('2d');
+                    const finalStream = recCanvas.captureStream(30); if (mixDest && mixDest.stream.getAudioTracks().length > 0) { finalStream.addTrack(mixDest.stream.getAudioTracks()[0]); }
+
+                    function drawRecordFrame() {
+                        if (!isRecording) return;
+                        recCtx.fillStyle = '#000'; recCtx.fillRect(0, 0, targetW, targetH);
+                        
+                        // ★ スマホ単体用：画面共有がない場合はカメラを全画面の背景にする！
+                        let mainSource = screenStream ? screenPreview : cameraPreview;
+                        
+                        if (mainSource && mainSource.readyState >= 2) {
+                            const vw = mainSource.videoWidth || mainSource.width, vh = mainSource.videoHeight || mainSource.height;
+                            if (vw && vh) {
+                                const vRatio = vw / vh, cRatio = targetW / targetH; let drawW, drawH, drawX = 0, drawY = 0;
+                                if (vRatio > cRatio) { drawH = targetH; drawW = vw * (targetH / vh); drawX = (targetW - drawW) / 2; } 
+                                else { drawW = targetW; drawH = vh * (targetW / vw); drawY = (targetH - drawH) / 2; }
+                                recCtx.drawImage(mainSource, drawX, drawY, drawW, drawH);
+                            }
+                        }
+                        
+                        // メインが画面共有で、PiPがONの時だけ小窓を描く
+                        if (screenStream && isPipActive && cameraPip.srcObject && cameraPip.readyState >= 2) {
+                            const rect = cameraPip.getBoundingClientRect(), parentRect = previewContainer.getBoundingClientRect();
+                            const pipW = (rect.width / parentRect.width) * targetW, pipH = (rect.height / parentRect.height) * targetH;
+                            const pipX = (rect.left - parentRect.left) / parentRect.width * targetW, pipY = (rect.top - parentRect.top) / parentRect.height * targetH;
+                            recCtx.drawImage(cameraPip, pipX, pipY, pipW, pipH);
+                            recCtx.strokeStyle = '#f39c12'; recCtx.lineWidth = targetW * 0.003; recCtx.strokeRect(pipX, pipY, pipW, pipH);
+                        }
+                        
+                        const parentRect = textLayer.getBoundingClientRect();
+                        document.querySelectorAll('.draggable-text').forEach(span => {
+                            const style = window.getComputedStyle(span); const rect = span.getBoundingClientRect();
+                            const relX = (rect.left - parentRect.left) / parentRect.width; const relY = (rect.top - parentRect.top) / parentRect.height;
+                            const scale = targetH / parentRect.height; const finalFontSize = parseFloat(style.fontSize) * scale;
+                            recCtx.font = `${span.dataset.fontWeight} ${finalFontSize}px ${span.dataset.fontFamily}`; recCtx.fillStyle = style.color; recCtx.textAlign = 'left'; recCtx.textBaseline = 'top';
+                            recCtx.strokeStyle = 'black'; recCtx.lineWidth = finalFontSize * 0.15; recCtx.lineJoin = 'round';
+                            const lines = span.innerText.split('\n'); let currY = relY * targetH; const x = relX * targetW;
+                            for (let line of lines) { recCtx.strokeText(line, x, currY); recCtx.fillText(line, x, currY); currY += finalFontSize * 1.2; }
+                        });
+                        requestAnimationFrame(drawRecordFrame);
+                    }
+
+                    recordedChunks = [];
+                    // ★ iPhone(iOS)対応: スマホ保存対応のためコーデックを柔軟に（mp4へフォールバック）
+                    const options = MediaRecorder.isTypeSupported('video/webm; codecs=vp9,opus') ? { mimeType: 'video/webm; codecs=vp9,opus', videoBitsPerSecond: 3000000 } : (MediaRecorder.isTypeSupported('video/mp4') ? { mimeType: 'video/mp4', videoBitsPerSecond: 3000000 } : { videoBitsPerSecond: 3000000 });
+                    mediaRecorder = new MediaRecorder(finalStream, options);
+                    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+                    
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' }); const url = URL.createObjectURL(blob);
+                        document.getElementById('btn-dl-original').href = url; document.getElementById('btn-dl-original').download = 'youtube_live_' + new Date().getTime() + (mediaRecorder.mimeType.includes('mp4') ? '.mp4' : '.webm');
+                        
+                        const postStudio = document.getElementById('post-studio'), editPlayer = document.getElementById('edit-player');
+                        postStudio.style.display = 'block'; editPlayer.src = url;
+                        
+                        const editWrapper = document.getElementById('edit-wrapper'); const [w, h] = ratioStr.split(':').map(Number); editWrapper.style.aspectRatio = `${w} / ${h}`;
+                        if (h >= w) { editWrapper.style.width = isMobileDevice ? '100%' : 'auto'; editWrapper.style.height = isMobileDevice ? 'auto' : '450px'; } 
+                        else { editWrapper.style.width = '100%'; editWrapper.style.height = 'auto'; }
+                        
+                        trimStart = 0; trimEnd = 0; document.getElementById('lbl-trim-start').innerText = '0.0'; document.getElementById('lbl-trim-end').innerText = '0.0';
+                        editPlayer.onloadedmetadata = () => { trimEnd = editPlayer.duration; document.getElementById('lbl-trim-end').innerText = trimEnd.toFixed(1); };
+                        setTimeout(() => { postStudio.scrollIntoView({ behavior: 'smooth' }); }, 500); logMsg("💾 動画が完成しました！");
+                    };
+                    
+                    isRecording = true; drawRecordFrame(); mediaRecorder.start(1000);
+                    btnRec.disabled = false; btnRec.innerText = "⏹ アプリから手動で録画を停止"; btnRec.style.background = "#5f6368"; document.getElementById('btn-dl').style.display = 'none'; updateRemoteStatus(true); logMsg("⏺ 指定サイズでの録画を開始しました！");
+                } catch(e) { logMsg("❌ 録画エラー: " + e.message); isCountingDown = false; btnRec.disabled = false; btnRec.innerText = "🔴 3️⃣ 録画開始"; btnRec.style.background = "#e74c3c"; }
+            }
+            
+            // ==========================================
+            // 🎬 録画後スタジオ (カット保存)
+            // ==========================================
+            let trimStart = 0; let trimEnd = 0; const editPlayer = document.getElementById('edit-player');
+            document.getElementById('btn-set-start').addEventListener('click', () => { trimStart = editPlayer.currentTime; document.getElementById('lbl-trim-start').innerText = trimStart.toFixed(1); });
+            document.getElementById('btn-set-end').addEventListener('click', () => { trimEnd = editPlayer.currentTime; document.getElementById('lbl-trim-end').innerText = trimEnd.toFixed(1); });
+
+            document.getElementById('btn-trim').addEventListener('click', async () => {
+                if (trimEnd <= trimStart) { alert("終了位置は開始位置より後に設定してください！"); return; }
+                const btnTrim = document.getElementById('btn-trim'); btnTrim.disabled = true; btnTrim.innerText = "⏳ カット処理中... (お待ちください)";
+                logMsg("✂️ カット編集を開始しました...");
+                
+                editPlayer.currentTime = trimStart; editPlayer.muted = false; editPlayer.volume = 1; await editPlayer.play();
+                let stream; if (editPlayer.captureStream) { stream = editPlayer.captureStream(); } else if (editPlayer.mozCaptureStream) { stream = editPlayer.mozCaptureStream(); } else { alert("お使いのブラウザは切り出し非対応です。下の『元動画を保存』から保存してください。"); btnTrim.disabled = false; btnTrim.innerText = "✂️ この範囲で最終保存"; return; }
+                
+                const options = MediaRecorder.isTypeSupported('video/webm; codecs=vp9,opus') ? { mimeType: 'video/webm; codecs=vp9,opus' } : (MediaRecorder.isTypeSupported('video/mp4') ? { mimeType: 'video/mp4' } : {});
+                const trimRecorder = new MediaRecorder(stream, options); const trimChunks = [];
+                trimRecorder.ondataavailable = e => { if (e.data.size > 0) trimChunks.push(e.data); };
+                trimRecorder.onstop = () => {
+                    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(trimChunks, { type: trimRecorder.mimeType || 'video/webm' })); a.download = 'youtube_final_' + new Date().getTime() + (trimRecorder.mimeType.includes('mp4') ? '.mp4' : '.webm'); a.click();
+                    btnTrim.disabled = false; btnTrim.innerText = "💾 この範囲で最終保存"; logMsg("✅ カットされた動画が保存されました！");
+                };
+
+                trimRecorder.start();
+                const checkInterval = setInterval(() => { if(editPlayer.currentTime >= trimEnd || editPlayer.ended) { clearInterval(checkInterval); if(trimRecorder.state !== "inactive") trimRecorder.stop(); editPlayer.pause(); } }, 100);
+            });
+
+            // 📸 ライブ・サムネイル保存
+            document.getElementById('btn-thumb-live').addEventListener('click', () => {
+                try {
+                    const ratioStr = aspectSelect.value; let targetW = 1920, targetH = 1080;
+                    if (ratioStr === '9:16') { targetW = 1080; targetH = 1920; } else if (ratioStr === '1:1') { targetW = 1080; targetH = 1080; }
+                    const thumbCanvas = document.createElement('canvas'); thumbCanvas.width = targetW; thumbCanvas.height = targetH; const ctx = thumbCanvas.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, targetW, targetH);
+                    
+                    let mainSource = screenStream ? screenPreview : cameraPreview;
+                    if (mainSource && mainSource.readyState >= 2) {
+                        const vw = mainSource.videoWidth || mainSource.width, vh = mainSource.videoHeight || mainSource.height;
+                        if (vw && vh) {
+                            const vRatio = vw / vh, cRatio = targetW / targetH; let drawW, drawH, drawX = 0, drawY = 0;
+                            if (vRatio > cRatio) { drawH = targetH; drawW = vw * (targetH / vh); drawX = (targetW - drawW) / 2; } else { drawW = targetW; drawH = vh * (targetW / vw); drawY = (targetH - drawH) / 2; }
+                            ctx.drawImage(mainSource, drawX, drawY, drawW, drawH);
+                        }
+                    }
+                    if (screenStream && isPipActive && cameraPip.srcObject && cameraPip.readyState >= 2) {
+                        const rect = cameraPip.getBoundingClientRect(), parentRect = previewContainer.getBoundingClientRect();
+                        const pipW = (rect.width / parentRect.width) * targetW, pipH = (rect.height / parentRect.height) * targetH;
+                        const pipX = (rect.left - parentRect.left) / parentRect.width * targetW, pipY = (rect.top - parentRect.top) / parentRect.height * targetH;
+                        ctx.drawImage(cameraPip, pipX, pipY, pipW, pipH); ctx.strokeStyle = '#f39c12'; ctx.lineWidth = targetW * 0.003; ctx.strokeRect(pipX, pipY, pipW, pipH);
+                    }
+                    const parentRect = textLayer.getBoundingClientRect();
+                    document.querySelectorAll('.draggable-text').forEach(span => {
+                        const style = window.getComputedStyle(span); const rect = span.getBoundingClientRect();
+                        const relX = (rect.left - parentRect.left) / parentRect.width, relY = (rect.top - parentRect.top) / parentRect.height;
+                        const scale = targetH / parentRect.height; const finalFontSize = parseFloat(style.fontSize) * scale;
+                        ctx.font = `${span.dataset.fontWeight} ${finalFontSize}px ${span.dataset.fontFamily}`; ctx.fillStyle = style.color; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                        ctx.strokeStyle = 'black'; ctx.lineWidth = finalFontSize * 0.15; ctx.lineJoin = 'round';
+                        const lines = span.innerText.split('\n'); let currY = relY * targetH; const x = relX * targetW;
+                        for (let line of lines) { ctx.strokeText(line, x, currY); ctx.fillText(line, x, currY); currY += finalFontSize * 1.2; }
+                    });
+                    const a = document.createElement('a'); a.href = thumbCanvas.toDataURL('image/png'); a.download = 'youtube_thumbnail_' + new Date().getTime() + '.png'; a.click(); logMsg("📸 サムネ画像を保存しました！");
+                } catch(e) { logMsg("❌ サムネ作成エラー"); }
+            });
+            
+            document.getElementById('record-aspect').dispatchEvent(new Event('change'));
+        }
+    </script>
+</body>
+</html>
